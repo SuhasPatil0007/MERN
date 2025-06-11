@@ -2,6 +2,11 @@ const express = require('express')
 const db = require('../database')
 const utils = require('../utils')
 const mailer = require('../mailer')
+const config = require('../config')
+const jwt = require('jsonwebtoken')
+const multer = require('multer')
+
+const upload = multer({dest: 'files'})
 
 const router = express.Router()
 
@@ -19,7 +24,8 @@ router.post('/register', (request, response) => {
         [firstName, lastName, email, utils.encryptPassword(password)],
         (error, result) => {
             // send welcome email to the user
-            mailer.sendEmail(
+            if(config.email.enabled) {
+                mailer.sendEmail(
                 email,
                 'Welcome to food ordering application',
                 `<h1>Welcome to the food ordering application</h1>
@@ -29,8 +35,8 @@ router.post('/register', (request, response) => {
                 <br/>
                 <div>Thank you</div>
                 <div>Admin.</div>`
-            )
-
+                )
+            }
             // send the result to the client
            response.send(utils.createResult(error, result))
         }
@@ -49,12 +55,33 @@ router.post('/login', (request, response) => {
         [email, utils.encryptPassword(password)],
         (error, users) => {
             if(error) {
-                return utils.createError(error)
+                response.send(utils.createError(error))
             } else {
                 if(users.length == 0) {
-                    return utils.createError('user does not exist')
+                    response.send(utils.createError('user does not exist'))
                 } else {
-                    response.send(utils.createSuccess(users[0]))
+                    const {id, firstName, lastName} = users[0]
+
+                    const payload = {
+                        id,
+                        firstName,
+                        lastName
+                    }
+                    
+                    try{
+                        //create a token
+                        const token = jwt.sign(payload, config.secret)
+                        response.send(
+                            utils.createSuccess({
+                                token,
+                                firstName,
+                                lastName
+                            })
+                        )
+
+                    } catch(ex) {
+                        response.send(utils.createError(ex))
+                    }
                 }
             }
         }
@@ -72,10 +99,10 @@ router.post('/forgot-password', (request, response) => {
         [email],
         (error, users) => {
             if(error) {
-                return utils.createError(error)
+                response.send(utils.createError(error))
             } else {
                 if(users.length == 0) {
-                    return utils.createError('user does not exist')
+                    response.send(utils.createError('user does not exist'))
                 } else {
                     const user = users[0]
 
@@ -108,6 +135,47 @@ router.put('/reset-password', (request, response) => {
     db.pool.execute(
         statement,
         [utils.encryptPassword(password), email],
+        (error, result) => {
+            response.send(utils.createResult(error, result))
+        }
+    )
+})
+
+router.get('/profile', (request, response) => {
+    const {id} = request['userInfo']
+    
+    const statement = `select firstName, lastName, email from users where id = ?`
+
+    db.pool.query(statement, [id], (error, users) => {
+        response.send(utils.createResult(error, users[0]))
+    })
+})
+
+router.put('/profile', (request, response) => {
+    const {firstName, lastName, password} = request.body
+
+    const statement = `update users set firstName = ?, lastName = ?, password = ? where id = ?`
+
+    db.pool.execute(
+        statement,
+        [
+            firstName,
+            lastName,
+            utils.encryptPassword(password),
+            request['userInfo']['id']
+        ],
+        (error, result) => {
+            response.send(utils.createResult(error, result))
+        }
+    )
+})
+
+router.put('/profile-image', upload.single('photo'), (request, response) => {
+    const statement = `update users set profileImage = ? where id = ?`
+
+    db.pool.execute(
+        statement,
+        [request.file.filename, request['userInfo']['id']],
         (error, result) => {
             response.send(utils.createResult(error, result))
         }
